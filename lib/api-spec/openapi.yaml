@@ -1,0 +1,637 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: facebook
+    description: Facebook Guard operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /fb/login:
+    post:
+      operationId: fbLogin
+      tags: [facebook]
+      summary: Login with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbLoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbLoginResponse"
+        "401":
+          description: Login failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/login-cookie:
+    post:
+      operationId: fbLoginCookie
+      tags: [facebook]
+      summary: Login with cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbCookieLoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbLoginResponse"
+        "401":
+          description: Login failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/guard:
+    post:
+      operationId: fbToggleGuard
+      tags: [facebook]
+      summary: Toggle profile guard on or off
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbGuardRequest"
+      responses:
+        "200":
+          description: Guard toggled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbGuardResponse"
+        "400":
+          description: Failed to toggle guard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/profile:
+    post:
+      operationId: fbGetProfile
+      tags: [facebook]
+      summary: Get profile information
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbTokenRequest"
+      responses:
+        "200":
+          description: Profile info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbProfileResponse"
+        "400":
+          description: Failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/posts:
+    post:
+      operationId: fbGetPosts
+      tags: [facebook]
+      summary: Get user posts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbTokenRequest"
+      responses:
+        "200":
+          description: Posts list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbPostsResponse"
+        "400":
+          description: Failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/delete-posts:
+    post:
+      operationId: fbDeletePosts
+      tags: [facebook]
+      summary: Delete selected posts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbDeletePostsRequest"
+      responses:
+        "200":
+          description: Delete result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbDeletePostsResponse"
+        "400":
+          description: Failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/friends:
+    post:
+      operationId: fbGetFriends
+      tags: [facebook]
+      summary: Get user friends
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbTokenRequest"
+      responses:
+        "200":
+          description: Friends list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbFriendsResponse"
+        "400":
+          description: Failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/profile/update:
+    post:
+      operationId: fbUpdateProfile
+      tags: [facebook]
+      summary: Update profile information
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbUpdateProfileRequest"
+      responses:
+        "200":
+          description: Profile update result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbUpdateProfileResponse"
+        "400":
+          description: Failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/profile-picture:
+    post:
+      operationId: fbUpdateProfilePicture
+      tags: [facebook]
+      summary: Update profile picture
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbUpdateProfilePictureRequest"
+      responses:
+        "200":
+          description: Profile picture update result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbUpdateProfilePictureResponse"
+        "400":
+          description: Failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/posts/create:
+    post:
+      operationId: fbCreatePost
+      tags: [facebook]
+      summary: Create a new post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbCreatePostRequest"
+      responses:
+        "200":
+          description: Created post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbCreatePostResponse"
+        "400":
+          description: Failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/videos:
+    post:
+      operationId: fbGetVideos
+      tags: [facebook]
+      summary: Get user videos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbTokenRequest"
+      responses:
+        "200":
+          description: Videos list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbVideosResponse"
+        "400":
+          description: Failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /fb/unfriend:
+    post:
+      operationId: fbUnfriend
+      tags: [facebook]
+      summary: Unfriend a Facebook friend
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbUnfriendRequest"
+      responses:
+        "200":
+          description: Unfriend result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbUnfriendResponse"
+        "400":
+          description: Failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    FbLoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+        - email
+        - password
+    FbCookieLoginRequest:
+      type: object
+      properties:
+        cookie:
+          type: string
+      required:
+        - cookie
+    FbLoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        userId:
+          type: string
+        name:
+          type: string
+      required:
+        - token
+        - userId
+        - name
+    FbGuardRequest:
+      type: object
+      properties:
+        token:
+          type: string
+        enable:
+          type: boolean
+      required:
+        - token
+        - enable
+    FbGuardResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        isShielded:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+        - isShielded
+        - message
+    FbTokenRequest:
+      type: object
+      properties:
+        token:
+          type: string
+      required:
+        - token
+    FbProfileResponse:
+      type: object
+      properties:
+        profilePicUrl:
+          type: string
+        friendsCount:
+          type: number
+        gender:
+          type: string
+        postCount:
+          type: number
+        parsedCookies:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+        - profilePicUrl
+        - friendsCount
+        - gender
+        - postCount
+        - parsedCookies
+    FbPost:
+      type: object
+      properties:
+        id:
+          type: string
+        message:
+          type: string
+        createdTime:
+          type: string
+        permalink:
+          type: string
+      required:
+        - id
+        - message
+        - createdTime
+    FbPostsResponse:
+      type: object
+      properties:
+        posts:
+          type: array
+          items:
+            $ref: "#/components/schemas/FbPost"
+      required:
+        - posts
+    FbDeletePostsRequest:
+      type: object
+      properties:
+        token:
+          type: string
+        postIds:
+          type: array
+          items:
+            type: string
+      required:
+        - token
+        - postIds
+    FbDeletePostsResponse:
+      type: object
+      properties:
+        deleted:
+          type: number
+        failed:
+          type: number
+        message:
+          type: string
+      required:
+        - deleted
+        - failed
+        - message
+    FbFriend:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        profileUrl:
+          type: string
+        pictureUrl:
+          type: string
+      required:
+        - id
+        - name
+        - profileUrl
+        - pictureUrl
+    FbFriendsResponse:
+      type: object
+      properties:
+        friends:
+          type: array
+          items:
+            $ref: "#/components/schemas/FbFriend"
+        total:
+          type: number
+        message:
+          type: string
+      required:
+        - friends
+        - total
+        - message
+    FbUpdateProfileRequest:
+      type: object
+      properties:
+        token:
+          type: string
+        name:
+          type: string
+        bio:
+          type: string
+        city:
+          type: string
+        work:
+          type: string
+        education:
+          type: string
+        relationship:
+          type: string
+        website:
+          type: string
+      required:
+        - token
+    FbUpdateProfileResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        appliedFields:
+          type: array
+          items:
+            type: string
+        failedFields:
+          type: array
+          items:
+            type: string
+      required:
+        - success
+        - message
+        - appliedFields
+        - failedFields
+    FbUpdateProfilePictureRequest:
+      type: object
+      properties:
+        token:
+          type: string
+        imageData:
+          type: string
+        imageUrl:
+          type: string
+        fileName:
+          type: string
+      required:
+        - token
+    FbUpdateProfilePictureResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        profilePicUrl:
+          type: string
+      required:
+        - success
+        - message
+    FbCreatePostRequest:
+      type: object
+      properties:
+        token:
+          type: string
+        message:
+          type: string
+        privacy:
+          type: string
+      required:
+        - token
+        - message
+    FbCreatePostResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        post:
+          $ref: "#/components/schemas/FbPost"
+        message:
+          type: string
+      required:
+        - success
+        - message
+    FbVideo:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        thumbnailUrl:
+          type: string
+        videoUrl:
+          type: string
+        permalink:
+          type: string
+        createdTime:
+          type: string
+      required:
+        - id
+        - title
+        - thumbnailUrl
+        - videoUrl
+        - permalink
+        - createdTime
+    FbVideosResponse:
+      type: object
+      properties:
+        videos:
+          type: array
+          items:
+            $ref: "#/components/schemas/FbVideo"
+        message:
+          type: string
+      required:
+        - videos
+        - message
+    FbUnfriendRequest:
+      type: object
+      properties:
+        token:
+          type: string
+        friendId:
+          type: string
+      required:
+        - token
+        - friendId
+    FbUnfriendResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+        - message
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message

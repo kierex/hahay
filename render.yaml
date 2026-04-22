@@ -1,0 +1,31 @@
+databases:
+  - name: fb-guard-db
+    plan: free
+    databaseName: fbguard
+    user: fbguard
+
+services:
+  - type: web
+    name: fb-guard
+    env: node
+    plan: free
+    buildCommand: >
+      npm install -g pnpm &&
+      pnpm install &&
+      pnpm --filter @workspace/fb-guard build &&
+      pnpm --filter @workspace/api-server build
+    startCommand: node --enable-source-maps artifacts/api-server/dist/index.mjs
+    healthCheckPath: /api/healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BASE_PATH
+        value: /
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fb-guard-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: PORT
+        value: 10000
