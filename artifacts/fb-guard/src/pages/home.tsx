@@ -1,0 +1,2559 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import {
+  Briefcase,
+  CheckSquare,
+  ChevronDown,
+  ChevronUp,
+  Cookie,
+  Copy,
+  Database,
+  Edit3,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  FileText,
+  GraduationCap,
+  Heart,
+  Image,
+  KeyRound,
+  Link2,
+  Loader2,
+  Lock,
+  LogOut,
+  MapPin,
+  Menu,
+  MessageCircle,
+  Moon,
+  Play,
+  RefreshCw,
+  Send,
+  Settings,
+  Share2,
+  Shield,
+  ShieldCheck,
+  ShieldOff,
+  Square,
+  Sun,
+  ThumbsUp,
+  Trash2,
+  User,
+  UserMinus,
+  UserPlus,
+  Users,
+  Video,
+  X,
+  Zap,
+} from "lucide-react";
+import { apiFetch } from "@/lib/api";
+import {
+  useFbCreatePost,
+  useFbDeletePosts,
+  useFbGetFriends,
+  useFbGetPosts,
+  useFbGetProfile,
+  useFbGetVideos,
+  useFbLogin,
+  useFbLoginCookie,
+  useFbSharePost,
+  useFbToggleGuard,
+  useFbUnfriend,
+  useFbUpdateProfile,
+  useFbUpdateProfilePicture,
+} from "@workspace/api-client-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useToast } from "@/hooks/use-toast";
+
+const emailLoginSchema = z.object({
+  email: z.string().min(1, { message: "Email or phone is required" }),
+  password: z.string().min(1, { message: "Password is required" }),
+});
+
+const cookieLoginSchema = z.object({
+  cookie: z.string().min(1, { message: "Cookie data is required" }),
+});
+
+const profileEditSchema = z.object({
+  name: z.string().optional(),
+  bio: z.string().optional(),
+  city: z.string().optional(),
+  work: z.string().optional(),
+  education: z.string().optional(),
+  relationship: z.string().optional(),
+  website: z.string().optional(),
+});
+
+const postSchema = z.object({
+  message: z.string().min(1, { message: "Post text is required" }),
+  privacy: z.string().optional(),
+});
+
+const pfpUrlSchema = z.object({
+  imageUrl: z.string().url({ message: "Enter a valid image URL" }),
+});
+
+type AuthState = {
+  token: string;
+  userId: string;
+  name: string;
+  eaagToken?: string;
+} | null;
+
+type Post = { id: string; message: string; createdTime: string; permalink?: string };
+type Friend = { id: string; name: string; profileUrl: string; pictureUrl: string };
+type VideoItem = {
+  id: string;
+  title: string;
+  thumbnailUrl: string;
+  videoUrl: string;
+  permalink: string;
+  createdTime: string;
+};
+type ProfileInfo = {
+  profilePicUrl: string;
+  friendsCount: number;
+  gender: string;
+  postCount: number;
+  parsedCookies: Record<string, string>;
+};
+
+function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string | number }) {
+  return (
+    <div className="flex flex-1 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/80">
+      <div className="text-[#1877F2]">{icon}</div>
+      <span className="text-lg font-bold text-slate-900 dark:text-slate-100">{value}</span>
+      <span className="text-xs text-slate-500 dark:text-slate-400">{label}</span>
+    </div>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-300 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+      {text}
+    </div>
+  );
+}
+
+function ThemeToggle({ darkMode, onToggle }: { darkMode: boolean; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      className={`relative flex h-10 w-[86px] items-center rounded-full border p-1 transition-all ${
+        darkMode ? "border-slate-600 bg-slate-800" : "border-slate-200 bg-white"
+      }`}
+      aria-label="Toggle dark mode"
+    >
+      <span
+        className={`absolute h-8 w-8 rounded-full shadow-md transition-transform ${
+          darkMode ? "translate-x-10 bg-slate-950" : "translate-x-0 bg-[#1877F2]"
+        }`}
+      />
+      <span className="z-10 flex h-8 w-8 items-center justify-center text-white">
+        <Sun className="h-4 w-4" />
+      </span>
+      <span className="z-10 ml-auto flex h-8 w-8 items-center justify-center text-slate-300">
+        <Moon className="h-4 w-4" />
+      </span>
+    </button>
+  );
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Could not read image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+export default function Home() {
+  const [auth, setAuth] = useState<AuthState>(() => {
+    try {
+      const saved = localStorage.getItem("fb-guard-auth");
+      if (saved) return JSON.parse(saved) as AuthState;
+    } catch { /* ignore */ }
+    return null;
+  });
+  const [guardStatus, setGuardStatus] = useState<{ isShielded: boolean; message: string } | null>(null);
+  const [profile, setProfile] = useState<ProfileInfo | null>(() => {
+    try {
+      const saved = localStorage.getItem("fb-guard-profile");
+      if (saved) return JSON.parse(saved) as ProfileInfo;
+    } catch { /* ignore */ }
+    return null;
+  });
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [videos, setVideos] = useState<VideoItem[]>([]);
+  const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set());
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+  const [showCookies, setShowCookies] = useState(false);
+  const [showToken, setShowToken] = useState(true);
+  const [imgError, setImgError] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("fb-guard-theme") === "dark");
+  const [unfriendingIds, setUnfriendingIds] = useState<Set<string>>(new Set());
+  const [unfriendAllInProgress, setUnfriendAllInProgress] = useState(false);
+  const [pfpMode, setPfpMode] = useState<"file" | "url">("file");
+  const [shareUrl, setShareUrl] = useState("");
+  const [shareCount, setShareCount] = useState(10);
+  const [shareLogs, setShareLogs] = useState<string[]>([]);
+  const [shareResult, setShareResult] = useState<{ success: number; failed: number; message: string } | null>(null);
+  const [reactUrl, setReactUrl] = useState("");
+  const [reactType, setReactType] = useState<"LIKE" | "LOVE" | "HAHA" | "WOW" | "SAD" | "ANGRY">("LIKE");
+  const [reactLogs, setReactLogs] = useState<string[]>([]);
+  const [reactResult, setReactResult] = useState<{ success: number; failed: number; total: number; message: string } | null>(null);
+  const [commentUrl, setCommentUrl] = useState("");
+  const [commentText, setCommentText] = useState("");
+  const [commentLogs, setCommentLogs] = useState<string[]>([]);
+  const [commentResult, setCommentResult] = useState<{ success: number; failed: number; total: number; message: string } | null>(null);
+  const [followTarget, setFollowTarget] = useState("");
+  const [followLogs, setFollowLogs] = useState<string[]>([]);
+  const [followResult, setFollowResult] = useState<{ success: number; failed: number; total: number; message: string } | null>(null);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminLoggedIn, setAdminLoggedIn] = useState(false);
+  const [adminLoginUser, setAdminLoginUser] = useState("");
+  const [adminLoginPass, setAdminLoginPass] = useState("");
+  const [adminLoginError, setAdminLoginError] = useState("");
+  const [adminLoginPending, setAdminLoginPending] = useState(false);
+  const [adminNewUser, setAdminNewUser] = useState("");
+  const [adminNewPass, setAdminNewPass] = useState("");
+  const [adminCredsBase64, setAdminCredsBase64] = useState("");
+  const [adminFullSessions, setAdminFullSessions] = useState<Array<{ userId: string; name: string; cookie: string; dtsg: string; eaagToken: string; createdAt: string; sessionToken: string; lsd: string; accessToken: string; isActive: boolean; lastPinged: string | null }>>([]);
+  const [adminSessionsLoading, setAdminSessionsLoading] = useState(false);
+  const [revealCookie, setRevealCookie] = useState<Record<string, boolean>>({});
+  const [revealEaag, setRevealEaag] = useState<Record<string, boolean>>({});
+  const [revealDtsg, setRevealDtsg] = useState<Record<string, boolean>>({});
+  const { toast } = useToast();
+
+  const loginMutation = useFbLogin();
+  const cookieLoginMutation = useFbLoginCookie();
+  const toggleGuardMutation = useFbToggleGuard();
+  const profileMutation = useFbGetProfile();
+  const postsMutation = useFbGetPosts();
+  const deletePostsMutation = useFbDeletePosts();
+  const friendsMutation = useFbGetFriends();
+  const unfriendMutation = useFbUnfriend();
+  const updateProfileMutation = useFbUpdateProfile();
+  const updateProfilePictureMutation = useFbUpdateProfilePicture();
+  const createPostMutation = useFbCreatePost();
+  const videosMutation = useFbGetVideos();
+  const sharePostMutation = useFbSharePost();
+
+  const reactMutation = useMutation({
+    mutationFn: async (body: { postUrl: string; reactionType: string }) => {
+      const res = await apiFetch("/api/fb/react", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json() as Promise<{ success: number; failed: number; total: number; message: string; details: string[] }>;
+    },
+  });
+
+  const commentMutation = useMutation({
+    mutationFn: async (body: { postUrl: string; commentText: string }) => {
+      const res = await apiFetch("/api/fb/comment", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json() as Promise<{ success: number; failed: number; total: number; message: string; details: string[] }>;
+    },
+  });
+
+  const sessionsQuery = useQuery({
+    queryKey: ["fb-sessions"],
+    queryFn: async () => {
+      const res = await apiFetch("/api/fb/sessions");
+      if (!res.ok) throw new Error("Failed to fetch sessions");
+      return res.json() as Promise<{ sessions: Array<{ userId: string; name: string; hasEaagToken: boolean; createdAt: string; isActive: boolean; lastPinged: string | null }>; total: number }>;
+    },
+    refetchInterval: 15000,
+  });
+
+  const deleteSessionMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiFetch(`/api/fb/sessions/${userId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to delete session");
+      return res.json();
+    },
+    onSuccess: () => { sessionsQuery.refetch(); toast({ title: "Session removed" }); },
+  });
+
+  const [reactivatingId, setReactivatingId] = useState<string | null>(null);
+
+  const reactivateSession = async (userId: string) => {
+    setReactivatingId(userId);
+    try {
+      const res = await apiFetch(`/api/fb/sessions/${userId}/reactivate`, { method: "POST" });
+      const data = await res.json() as { ok: boolean; message: string };
+      if (data.ok) {
+        setAdminFullSessions(prev => prev.map(s => s.userId === userId ? { ...s, isActive: true } : s));
+        sessionsQuery.refetch();
+        toast({ title: "Session reactivated!", description: data.message });
+      } else {
+        toast({ title: "Session is dead", description: data.message, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to check session", variant: "destructive" });
+    } finally {
+      setReactivatingId(null);
+    }
+  };
+
+  const refreshTokenMutation = useMutation({
+    mutationFn: async (token: string) => {
+      const res = await apiFetch("/api/fb/refresh-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json() as Promise<{ eaagToken: string | null; found: boolean }>;
+    },
+  });
+
+  const followMutation = useMutation({
+    mutationFn: async (body: { target: string }) => {
+      const res = await apiFetch("/api/fb/follow", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json() as Promise<{ success: number; failed: number; total: number; message: string; details: string[] }>;
+    },
+  });
+
+  const adminLoginHandler = async () => {
+    if (!adminLoginUser.trim() || !adminLoginPass.trim()) return;
+    setAdminLoginPending(true);
+    setAdminLoginError("");
+    try {
+      const res = await apiFetch("/api/fb/admin/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: adminLoginUser, password: adminLoginPass }),
+      });
+      if (res.ok) {
+        const b64 = btoa(`${adminLoginUser}:${adminLoginPass}`);
+        setAdminCredsBase64(b64);
+        setAdminLoggedIn(true);
+        setAdminLoginError("");
+        loadAdminSessions(b64);
+      } else {
+        setAdminLoginError("Invalid username or password");
+      }
+    } catch {
+      setAdminLoginError("Connection error");
+    } finally {
+      setAdminLoginPending(false);
+    }
+  };
+
+  const loadAdminSessions = async (b64: string) => {
+    setAdminSessionsLoading(true);
+    try {
+      const res = await apiFetch("/api/fb/sessions-full", {
+        headers: { authorization: `Basic ${b64}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAdminFullSessions(data.sessions ?? []);
+      }
+    } catch { /* ignore */ }
+    finally { setAdminSessionsLoading(false); }
+  };
+
+  const updateAdminCreds = async () => {
+    if (!adminNewUser.trim() || !adminNewPass.trim()) return;
+    try {
+      const res = await apiFetch("/api/fb/admin/update", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Basic ${adminCredsBase64}` },
+        body: JSON.stringify({ username: adminNewUser, password: adminNewPass }),
+      });
+      if (res.ok) {
+        const newB64 = btoa(`${adminNewUser}:${adminNewPass}`);
+        setAdminCredsBase64(newB64);
+        setAdminLoginUser(adminNewUser);
+        setAdminLoginPass(adminNewPass);
+        setAdminNewUser("");
+        setAdminNewPass("");
+        toast({ title: "Credentials updated" });
+      } else {
+        toast({ variant: "destructive", title: "Failed to update credentials" });
+      }
+    } catch {
+      toast({ variant: "destructive", title: "Connection error" });
+    }
+  };
+
+  const handleFollow = useCallback(() => {
+    if (!followTarget.trim()) return;
+    setFollowLogs(["Sending follow/add requests..."]);
+    setFollowResult(null);
+    followMutation.mutate(
+      { target: followTarget.trim() },
+      {
+        onSuccess: (result) => {
+          setFollowLogs(result.details);
+          setFollowResult({ success: result.success, failed: result.failed, total: result.total, message: result.message });
+          toast({
+            title: result.success > 0 ? "Follow done" : "All follows failed",
+            description: result.message,
+            variant: result.success > 0 ? "default" : "destructive",
+          });
+        },
+        onError: (err) => {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          setFollowLogs([`Error: ${msg}`]);
+          toast({ variant: "destructive", title: "Follow failed", description: msg });
+        },
+      }
+    );
+  }, [followTarget, followMutation, toast]);
+
+  const handleReact = useCallback(() => {
+    if (!reactUrl.trim()) return;
+    setReactLogs(["Sending reactions..."]);
+    setReactResult(null);
+    reactMutation.mutate(
+      { postUrl: reactUrl.trim(), reactionType: reactType },
+      {
+        onSuccess: (result) => {
+          setReactLogs(result.details);
+          setReactResult({ success: result.success, failed: result.failed, total: result.total, message: result.message });
+          toast({
+            title: result.success > 0 ? "Reactions done" : "All reactions failed",
+            description: result.message,
+            variant: result.success > 0 ? "default" : "destructive",
+          });
+        },
+        onError: (err) => {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          setReactLogs([`Error: ${msg}`]);
+          toast({ variant: "destructive", title: "Reaction failed", description: msg });
+        },
+      }
+    );
+  }, [reactUrl, reactType, reactMutation, toast]);
+
+  const handleComment = useCallback(() => {
+    if (!commentUrl.trim() || !commentText.trim()) return;
+    setCommentLogs(["Posting comments..."]);
+    setCommentResult(null);
+    commentMutation.mutate(
+      { postUrl: commentUrl.trim(), commentText: commentText.trim() },
+      {
+        onSuccess: (result) => {
+          setCommentLogs(result.details);
+          setCommentResult({ success: result.success, failed: result.failed, total: result.total, message: result.message });
+          toast({
+            title: result.success > 0 ? "Comments posted" : "All comments failed",
+            description: result.message,
+            variant: result.success > 0 ? "default" : "destructive",
+          });
+        },
+        onError: (err) => {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          setCommentLogs([`Error: ${msg}`]);
+          toast({ variant: "destructive", title: "Comment failed", description: msg });
+        },
+      }
+    );
+  }, [commentUrl, commentText, commentMutation, toast]);
+
+  const emailForm = useForm<z.infer<typeof emailLoginSchema>>({
+    resolver: zodResolver(emailLoginSchema),
+    defaultValues: { email: "", password: "" },
+  });
+
+  const cookieForm = useForm<z.infer<typeof cookieLoginSchema>>({
+    resolver: zodResolver(cookieLoginSchema),
+    defaultValues: { cookie: "" },
+  });
+
+  const profileForm = useForm<z.infer<typeof profileEditSchema>>({
+    resolver: zodResolver(profileEditSchema),
+    defaultValues: { name: "", bio: "", city: "", work: "", education: "", relationship: "", website: "" },
+  });
+
+  const postForm = useForm<z.infer<typeof postSchema>>({
+    resolver: zodResolver(postSchema),
+    defaultValues: { message: "", privacy: "SELF" },
+  });
+
+  const pfpUrlForm = useForm<z.infer<typeof pfpUrlSchema>>({
+    resolver: zodResolver(pfpUrlSchema),
+    defaultValues: { imageUrl: "" },
+  });
+
+  const selectedVideo = useMemo(
+    () => videos.find((video) => video.id === activeVideoId) ?? videos[0] ?? null,
+    [activeVideoId, videos],
+  );
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", darkMode);
+    localStorage.setItem("fb-guard-theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
+
+  useEffect(() => {
+    if (auth) {
+      localStorage.setItem("fb-guard-auth", JSON.stringify(auth));
+    } else {
+      localStorage.removeItem("fb-guard-auth");
+    }
+  }, [auth]);
+
+  useEffect(() => {
+    if (profile) {
+      localStorage.setItem("fb-guard-profile", JSON.stringify(profile));
+    } else {
+      localStorage.removeItem("fb-guard-profile");
+    }
+  }, [profile]);
+
+  const loadProfile = (token: string) => {
+    profileMutation.mutate(
+      { data: { token } },
+      {
+        onSuccess: (prof) => setProfile(prof),
+        onError: () =>
+          toast({ variant: "destructive", title: "Profile failed", description: "Could not load profile details." }),
+      },
+    );
+  };
+
+  const onLoginSuccess = (data: { token: string; userId: string; name: string; eaagToken?: string }) => {
+    setAuth({ token: data.token, userId: data.userId, name: data.name, eaagToken: data.eaagToken });
+    setGuardStatus(null);
+    setProfile(null);
+    setPosts([]);
+    setFriends([]);
+    setVideos([]);
+    setSelectedPosts(new Set());
+    toast({ title: "Logged in", description: `Welcome, ${data.name}` });
+    window.setTimeout(() => loadProfile(data.token), 100);
+  };
+
+  const onEmailSubmit = (values: z.infer<typeof emailLoginSchema>) => {
+    loginMutation.mutate(
+      { data: values },
+      {
+        onSuccess: onLoginSuccess,
+        onError: (err) =>
+          toast({ variant: "destructive", title: "Login failed", description: err.message || "Failed to authenticate." }),
+      },
+    );
+  };
+
+  const onCookieSubmit = (values: z.infer<typeof cookieLoginSchema>) => {
+    cookieLoginMutation.mutate(
+      { data: values },
+      {
+        onSuccess: onLoginSuccess,
+        onError: (err) =>
+          toast({ variant: "destructive", title: "Login failed", description: err.message || "Failed to authenticate." }),
+      },
+    );
+  };
+
+  const handleToggleGuard = (enable: boolean) => {
+    if (!auth) return;
+    toggleGuardMutation.mutate(
+      { data: { token: auth.token, enable } },
+      {
+        onSuccess: (data) => {
+          setGuardStatus({ isShielded: data.isShielded, message: data.message });
+          toast({
+            title: data.success
+              ? enable
+                ? "Profile Guard Enabled"
+                : "Profile Guard Disabled"
+              : "Guard Toggle Failed",
+            description: data.message,
+            variant: data.success ? "default" : "destructive",
+          });
+        },
+        onError: (err) =>
+          toast({ variant: "destructive", title: "Error", description: err.message || "Failed to toggle guard." }),
+      },
+    );
+  };
+
+  const handleLoadPosts = () => {
+    if (!auth) return;
+    postsMutation.mutate(
+      { data: { token: auth.token } },
+      {
+        onSuccess: (data) => {
+          setPosts(data.posts);
+          setSelectedPosts(new Set());
+          toast({ title: "Posts loaded", description: `${data.posts.length} post(s) returned.` });
+        },
+        onError: (err) =>
+          toast({ variant: "destructive", title: "Error", description: err.message || "Failed to load posts." }),
+      },
+    );
+  };
+
+  const handleLoadFriends = () => {
+    if (!auth) return;
+    friendsMutation.mutate(
+      { data: { token: auth.token } },
+      {
+        onSuccess: (data) => {
+          setFriends(data.friends);
+          toast({ title: "Friends loaded", description: data.message });
+        },
+        onError: (err) =>
+          toast({ variant: "destructive", title: "Error", description: err.message || "Failed to load friends." }),
+      },
+    );
+  };
+
+  const handleUnfriend = (friend: Friend) => {
+    if (!auth) return;
+    setUnfriendingIds((prev) => new Set(prev).add(friend.id));
+    unfriendMutation.mutate(
+      { data: { token: auth.token, friendId: friend.id } },
+      {
+        onSuccess: (result) => {
+          setUnfriendingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(friend.id);
+            return next;
+          });
+          toast({
+            title: result.success ? "Unfriended" : "Unfriend Failed",
+            description: result.message,
+            variant: result.success ? "default" : "destructive",
+          });
+          if (result.success) {
+            setFriends((prev) => prev.filter((f) => f.id !== friend.id));
+          }
+        },
+        onError: (err) => {
+          setUnfriendingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(friend.id);
+            return next;
+          });
+          toast({ variant: "destructive", title: "Unfriend failed", description: err.message });
+        },
+      },
+    );
+  };
+
+  const handleUnfriendAll = async () => {
+    if (!auth || friends.length === 0 || unfriendAllInProgress) return;
+    const confirmed = window.confirm(`Are you sure you want to unfriend ALL ${friends.length} friends? This cannot be undone.`);
+    if (!confirmed) return;
+    setUnfriendAllInProgress(true);
+    const snapshot = [...friends];
+    let successCount = 0;
+    let failCount = 0;
+    for (const friend of snapshot) {
+      setUnfriendingIds((prev) => new Set(prev).add(friend.id));
+      try {
+        await new Promise<void>((resolve) => {
+          unfriendMutation.mutate(
+            { data: { token: auth.token, friendId: friend.id } },
+            {
+              onSuccess: (result) => {
+                if (result.success) {
+                  successCount++;
+                  setFriends((prev) => prev.filter((f) => f.id !== friend.id));
+                } else {
+                  failCount++;
+                }
+                setUnfriendingIds((prev) => {
+                  const next = new Set(prev);
+                  next.delete(friend.id);
+                  return next;
+                });
+                resolve();
+              },
+              onError: () => {
+                failCount++;
+                setUnfriendingIds((prev) => {
+                  const next = new Set(prev);
+                  next.delete(friend.id);
+                  return next;
+                });
+                resolve();
+              },
+            },
+          );
+        });
+      } catch {
+        failCount++;
+      }
+      await new Promise((r) => setTimeout(r, 800));
+    }
+    setUnfriendAllInProgress(false);
+    toast({
+      title: "Unfriend All Complete",
+      description: `${successCount} unfriended, ${failCount} failed.`,
+      variant: failCount > 0 ? "destructive" : "default",
+    });
+  };
+
+  const handleLoadVideos = () => {
+    if (!auth) return;
+    videosMutation.mutate(
+      { data: { token: auth.token } },
+      {
+        onSuccess: (data) => {
+          setVideos(data.videos);
+          setActiveVideoId(data.videos[0]?.id ?? null);
+          toast({ title: "Videos loaded", description: data.message });
+        },
+        onError: (err) =>
+          toast({ variant: "destructive", title: "Error", description: err.message || "Failed to load videos." }),
+      },
+    );
+  };
+
+  const handleSelectAll = () => {
+    setSelectedPosts(selectedPosts.size === posts.length ? new Set() : new Set(posts.map((p) => p.id)));
+  };
+
+  const handleTogglePost = (id: string) => {
+    const next = new Set(selectedPosts);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedPosts(next);
+  };
+
+  const handleDeleteSelected = () => {
+    if (!auth || selectedPosts.size === 0) return;
+    const postIds = Array.from(selectedPosts);
+    deletePostsMutation.mutate(
+      { data: { token: auth.token, postIds } },
+      {
+        onSuccess: (result) => {
+          toast({
+            title: "Delete complete",
+            description: result.message,
+            variant: result.failed > 0 ? "destructive" : "default",
+          });
+          if (result.deleted > 0) setPosts((prev) => prev.filter((p) => !selectedPosts.has(p.id)));
+          setSelectedPosts(new Set());
+        },
+        onError: (err) => toast({ variant: "destructive", title: "Delete failed", description: err.message }),
+      },
+    );
+  };
+
+  const handleCreatePost = (values: z.infer<typeof postSchema>) => {
+    if (!auth) return;
+    createPostMutation.mutate(
+      { data: { token: auth.token, message: values.message, privacy: values.privacy || "SELF" } },
+      {
+        onSuccess: (result) => {
+          toast({
+            title: result.success ? "Post submitted" : "Post failed",
+            description: result.message,
+            variant: result.success ? "default" : "destructive",
+          });
+          if (result.success && result.post) {
+            setPosts((prev) => [result.post as Post, ...prev]);
+            postForm.reset({ message: "", privacy: values.privacy || "SELF" });
+          }
+        },
+        onError: (err) => toast({ variant: "destructive", title: "Post failed", description: err.message }),
+      },
+    );
+  };
+
+  const handleUpdateProfile = (values: z.infer<typeof profileEditSchema>) => {
+    if (!auth) return;
+    updateProfileMutation.mutate(
+      { data: { token: auth.token, ...values } },
+      {
+        onSuccess: (result) => {
+          toast({
+            title: result.success ? "Profile update sent" : "Profile update blocked",
+            description: result.message,
+            variant: result.success ? "default" : "destructive",
+          });
+          if (result.success) loadProfile(auth.token);
+        },
+        onError: (err) => toast({ variant: "destructive", title: "Update failed", description: err.message }),
+      },
+    );
+  };
+
+  const handleProfilePictureChangeFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!auth) return;
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast({ variant: "destructive", title: "Invalid file", description: "Choose an image file." });
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast({ variant: "destructive", title: "Image too large", description: "Choose an image under 10MB." });
+      return;
+    }
+    try {
+      const imageData = await fileToDataUrl(file);
+      updateProfilePictureMutation.mutate(
+        { data: { token: auth.token, imageData, fileName: file.name } },
+        {
+          onSuccess: (result) => {
+            toast({
+              title: result.success ? "Profile picture updated" : "Profile picture failed",
+              description: result.message,
+              variant: result.success ? "default" : "destructive",
+            });
+            if (result.profilePicUrl) {
+              setImgError(false);
+              setProfile((prev) => (prev ? { ...prev, profilePicUrl: result.profilePicUrl || prev.profilePicUrl } : prev));
+            }
+            if (result.success) loadProfile(auth.token);
+          },
+          onError: (err) => toast({ variant: "destructive", title: "Upload failed", description: err.message }),
+        },
+      );
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Upload failed",
+        description: err instanceof Error ? err.message : "Could not read image.",
+      });
+    }
+  };
+
+  const handleProfilePictureChangeUrl = (values: z.infer<typeof pfpUrlSchema>) => {
+    if (!auth) return;
+    updateProfilePictureMutation.mutate(
+      { data: { token: auth.token, imageUrl: values.imageUrl, fileName: "profile.jpg" } },
+      {
+        onSuccess: (result) => {
+          toast({
+            title: result.success ? "Profile picture updated" : "Profile picture failed",
+            description: result.message,
+            variant: result.success ? "default" : "destructive",
+          });
+          if (result.profilePicUrl) {
+            setImgError(false);
+            setProfile((prev) => (prev ? { ...prev, profilePicUrl: result.profilePicUrl || prev.profilePicUrl } : prev));
+          }
+          if (result.success) {
+            pfpUrlForm.reset();
+            loadProfile(auth.token);
+          }
+        },
+        onError: (err) => toast({ variant: "destructive", title: "Upload failed", description: err.message }),
+      },
+    );
+  };
+
+  const handleShare = () => {
+    if (!auth || !shareUrl.trim()) return;
+    const url = shareUrl.trim();
+    const cnt = Math.max(1, shareCount);
+    setShareLogs(["Starting share process..."]);
+    setShareResult(null);
+    sharePostMutation.mutate(
+      { data: { token: auth.token, postUrl: url, count: cnt } },
+      {
+        onSuccess: (result) => {
+          setShareLogs(result.details);
+          setShareResult({ success: result.success, failed: result.failed, message: result.message });
+          toast({
+            title: result.success > 0 ? "Shares completed" : "All shares failed",
+            description: result.message,
+            variant: result.success > 0 ? "default" : "destructive",
+          });
+        },
+        onError: (err) => {
+          setShareLogs(["Error: " + (err.message || "Unknown error")]);
+          toast({ variant: "destructive", title: "Share failed", description: err.message || "Could not share post." });
+        },
+      }
+    );
+  };
+
+  const handleLogout = () => {
+    setAuth(null);
+    localStorage.removeItem("fb-guard-auth");
+    setGuardStatus(null);
+    setProfile(null);
+    setPosts([]);
+    setFriends([]);
+    setVideos([]);
+    setActiveVideoId(null);
+    setSelectedPosts(new Set());
+    setImgError(false);
+    setShareLogs([]);
+    setShareResult(null);
+    setShareUrl("");
+    setReactLogs([]);
+    setReactResult(null);
+    setReactUrl("");
+    setCommentLogs([]);
+    setCommentResult(null);
+    setCommentUrl("");
+    setCommentText("");
+    setFollowLogs([]);
+    setFollowResult(null);
+    setFollowTarget("");
+    setAdminOpen(false);
+    setAdminLoggedIn(false);
+    setAdminFullSessions([]);
+    emailForm.reset();
+    cookieForm.reset();
+    profileForm.reset();
+    postForm.reset();
+    pfpUrlForm.reset();
+  };
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      toast({ title: "Copied", description: `${label} copied to clipboard.` });
+    });
+  };
+
+  if (!auth) {
+    return (
+      <div className="min-h-screen bg-[#F0F2F5] p-4 text-slate-900 dark:bg-[#18191A] dark:text-slate-100">
+        <div className="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-md flex-col justify-center space-y-6">
+          <div className="space-y-2 text-center">
+            <div className="flex items-center justify-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#1877F2] shadow-lg shadow-blue-500/20">
+                <Shield className="h-8 w-8 text-white" />
+              </div>
+            </div>
+            <h1 className="text-3xl font-bold text-slate-950 dark:text-white">Facebook Guard</h1>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Manage guard, friends, posts, profile & videos
+            </p>
+          </div>
+
+          <Card className="overflow-hidden rounded-3xl border-0 shadow-xl dark:bg-[#242526]">
+            <CardContent className="p-6">
+              <Tabs defaultValue="cookie" className="w-full">
+                <TabsList className="mb-6 grid w-full grid-cols-2 rounded-2xl bg-slate-100 p-1 dark:bg-slate-800">
+                  <TabsTrigger
+                    value="cookie"
+                    className="rounded-xl data-[state=active]:bg-white data-[state=active]:text-[#1877F2] dark:data-[state=active]:bg-slate-700"
+                  >
+                    <Cookie className="mr-2 h-4 w-4" />
+                    Cookie Login
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="email"
+                    className="rounded-xl data-[state=active]:bg-white data-[state=active]:text-[#1877F2] dark:data-[state=active]:bg-slate-700"
+                  >
+                    <KeyRound className="mr-2 h-4 w-4" />
+                    Password Login
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="cookie">
+                  <Form {...cookieForm}>
+                    <form onSubmit={cookieForm.handleSubmit(onCookieSubmit)} className="space-y-4">
+                      <FormField
+                        control={cookieForm.control}
+                        name="cookie"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Facebook Cookie</FormLabel>
+                            <FormControl>
+                              <textarea
+                                placeholder="Paste your full Facebook cookie string here (c_user=...; xs=...;)"
+                                className="min-h-[120px] w-full resize-none rounded-2xl border border-slate-200 bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-[#1877F2] dark:border-slate-700 dark:bg-slate-900"
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <Button
+                        type="submit"
+                        className="h-12 w-full rounded-2xl bg-[#1877F2] text-base font-semibold hover:bg-[#0f66d4]"
+                        disabled={cookieLoginMutation.isPending}
+                      >
+                        {cookieLoginMutation.isPending ? (
+                          <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                        ) : (
+                          <Cookie className="mr-2 h-5 w-5" />
+                        )}
+                        {cookieLoginMutation.isPending ? "Connecting..." : "Login with Cookie"}
+                      </Button>
+                    </form>
+                  </Form>
+                </TabsContent>
+
+                <TabsContent value="email">
+                  <Form {...emailForm}>
+                    <form onSubmit={emailForm.handleSubmit(onEmailSubmit)} className="space-y-4">
+                      <FormField
+                        control={emailForm.control}
+                        name="email"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Email or Phone</FormLabel>
+                            <FormControl>
+                              <Input placeholder="email@example.com or phone number" className="h-11 rounded-2xl" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={emailForm.control}
+                        name="password"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Password</FormLabel>
+                            <FormControl>
+                              <Input type="password" placeholder="••••••••" className="h-11 rounded-2xl" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                        Facebook may block password logins from cloud servers. Cookie Login usually works better.
+                      </div>
+                      <Button
+                        type="submit"
+                        className="h-12 w-full rounded-2xl bg-[#1877F2] text-base font-semibold hover:bg-[#0f66d4]"
+                        disabled={loginMutation.isPending}
+                      >
+                        {loginMutation.isPending ? (
+                          <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                        ) : (
+                          <KeyRound className="mr-2 h-5 w-5" />
+                        )}
+                        {loginMutation.isPending ? "Logging in..." : "Login with Password"}
+                      </Button>
+                    </form>
+                  </Form>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#F0F2F5] p-4 text-slate-900 dark:bg-[#18191A] dark:text-slate-100">
+      <div className="mx-auto max-w-5xl space-y-4">
+        <div className="sticky top-0 z-20 -mx-4 border-b border-slate-200 bg-[#F0F2F5]/95 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-[#18191A]/95">
+          <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#1877F2]">
+                <Shield className="h-5 w-5 text-white" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate font-bold">Facebook Guard</p>
+                <p className="truncate text-xs text-slate-500 dark:text-slate-400">UID: {auth.userId}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <ThemeToggle darkMode={darkMode} onToggle={() => setDarkMode((value) => !value)} />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleLogout}
+                className="rounded-2xl border-slate-200 dark:border-slate-700"
+              >
+                <LogOut className="mr-1 h-4 w-4" /> Logout
+              </Button>
+              <button
+                onClick={() => setAdminOpen(true)}
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-[#242526] dark:text-slate-300 dark:hover:bg-slate-700"
+                title="Admin Panel"
+              >
+                <Menu className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
+          <div className="space-y-4">
+            <Card className="overflow-hidden rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+              <CardContent className="p-6">
+                <div className="flex items-start gap-4">
+                  <div className="relative shrink-0">
+                    {profile?.profilePicUrl && !imgError ? (
+                      <img
+                        src={profile.profilePicUrl}
+                        alt="Profile"
+                        className="h-24 w-24 rounded-full border-4 border-white object-cover shadow-md dark:border-slate-800"
+                        onError={() => setImgError(true)}
+                      />
+                    ) : (
+                      <div className="flex h-24 w-24 items-center justify-center rounded-full border-4 border-white bg-[#1877F2] shadow-md dark:border-slate-800">
+                        <User className="h-12 w-12 text-white" />
+                      </div>
+                    )}
+                    {guardStatus?.isShielded && (
+                      <div className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-green-500 dark:border-slate-800">
+                        <ShieldCheck className="h-5 w-5 text-white" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="truncate text-2xl font-bold">{auth.name}</h2>
+                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Connected account</p>
+                    {profileMutation.isPending && (
+                      <p className="mt-2 flex items-center gap-1 text-xs text-[#1877F2]">
+                        <Loader2 className="h-3 w-3 animate-spin" /> Loading profile...
+                      </p>
+                    )}
+                    {guardStatus && (
+                      <Badge
+                        variant="outline"
+                        className={`mt-3 ${guardStatus.isShielded ? "border-green-300 bg-green-50 text-green-700 dark:bg-green-950/30" : "border-slate-300 bg-slate-50 text-slate-600 dark:bg-slate-800"}`}
+                      >
+                        {guardStatus.isShielded ? "Guard Active" : "Guard Inactive"}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                {profile && (
+                  <div className="mt-6 grid grid-cols-3 gap-3">
+                    <StatCard
+                      icon={<Users className="h-5 w-5" />}
+                      label="Friends"
+                      value={profile.friendsCount > 0 ? profile.friendsCount.toLocaleString() : friends.length || "—"}
+                    />
+                    <StatCard icon={<User className="h-5 w-5" />} label="Gender" value={profile.gender || "—"} />
+                    <StatCard
+                      icon={<FileText className="h-5 w-5" />}
+                      label="Posts"
+                      value={posts.length || profile.postCount || "—"}
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+              <CardContent className="p-6">
+                <h3 className="mb-1 flex items-center gap-2 font-semibold">
+                  <ShieldCheck className="h-5 w-5 text-[#1877F2]" /> Profile Guard
+                </h3>
+                <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">
+                  Enable or disable Facebook Profile Guard.
+                </p>
+                {guardStatus && (
+                  <div
+                    className={`mb-4 rounded-2xl border p-3 text-sm ${guardStatus.isShielded ? "border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950/30" : "border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800"}`}
+                  >
+                    {guardStatus.message}
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    onClick={() => handleToggleGuard(true)}
+                    disabled={toggleGuardMutation.isPending}
+                    className="h-11 rounded-2xl bg-[#1877F2] font-semibold hover:bg-[#0f66d4]"
+                  >
+                    {toggleGuardMutation.isPending ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                    )}
+                    Enable
+                  </Button>
+                  <Button
+                    onClick={() => handleToggleGuard(false)}
+                    disabled={toggleGuardMutation.isPending}
+                    variant="outline"
+                    className="h-11 rounded-2xl font-semibold"
+                  >
+                    <ShieldOff className="mr-2 h-4 w-4" /> Disable
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Access Token Card */}
+            <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+              <CardContent className="p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-sm font-semibold">
+                    <KeyRound className="h-4 w-4 text-[#1877F2]" /> Access Token
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 rounded-xl text-xs"
+                    disabled={refreshTokenMutation.isPending}
+                    onClick={() => {
+                      refreshTokenMutation.mutate(auth.token, {
+                        onSuccess: (data) => {
+                          if (data.eaagToken) {
+                            setAuth((prev) => prev ? { ...prev, eaagToken: data.eaagToken! } : prev);
+                            toast({ title: "Token extracted!", description: data.eaagToken!.substring(0, 30) + "..." });
+                          } else {
+                            toast({ variant: "destructive", title: "Token not found", description: "Try a cookie with business.facebook.com access" });
+                          }
+                        },
+                        onError: () => toast({ variant: "destructive", title: "Extraction failed" }),
+                      });
+                    }}
+                  >
+                    {refreshTokenMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                    <span className="ml-1">{refreshTokenMutation.isPending ? "Extracting..." : "Refresh"}</span>
+                  </Button>
+                </div>
+
+                {auth.eaagToken ? (
+                  <div>
+                    <p className="mb-1 text-xs font-semibold text-green-600 dark:text-green-400">✓ EAAG Access Token</p>
+                    <div className="flex items-start gap-2 rounded-xl bg-slate-100 p-3 dark:bg-slate-800">
+                      <p className="flex-1 break-all font-mono text-xs text-slate-700 dark:text-slate-300">
+                        {auth.eaagToken}
+                      </p>
+                      <button
+                        onClick={() => copyToClipboard(auth.eaagToken!, "EAAG token")}
+                        className="mt-0.5 shrink-0 text-[#1877F2] hover:text-[#0f66d4]"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl bg-amber-50 p-3 dark:bg-amber-950/30">
+                    <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">EAAG token not found</p>
+                    <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-500">Click Refresh to extract from business.facebook.com</p>
+                  </div>
+                )}
+
+                <div>
+                  <p className="mb-1 text-xs font-semibold text-slate-500">Session Token (raw)</p>
+                  <div className="flex items-start gap-2 rounded-xl bg-slate-100 p-3 dark:bg-slate-800">
+                    <p className="flex-1 break-all font-mono text-xs text-slate-500 dark:text-slate-400">
+                      {auth.token}
+                    </p>
+                    <button
+                      onClick={() => copyToClipboard(auth.token, "Session token")}
+                      className="mt-0.5 shrink-0 text-slate-400 hover:text-[#1877F2]"
+                    >
+                      <Copy className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <p className="text-xs text-slate-400">UID: <span className="font-mono">{auth.userId}</span></p>
+              </CardContent>
+            </Card>
+
+            {profile && Object.keys(profile.parsedCookies).length > 0 && (
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardHeader className="p-4 pb-0">
+                  <button
+                    className="flex w-full items-center justify-between text-left"
+                    onClick={() => setShowCookies((value) => !value)}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-semibold">
+                      <Cookie className="h-4 w-4 text-[#1877F2]" /> Cookie Details
+                    </span>
+                    {showCookies ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
+                  </button>
+                </CardHeader>
+                {showCookies && (
+                  <CardContent className="max-h-56 overflow-y-auto p-4 pt-3 text-xs">
+                    {Object.entries(profile.parsedCookies).map(([key, value]) => (
+                      <div key={key} className="flex gap-2 border-b border-slate-100 py-1.5 last:border-0 dark:border-slate-800">
+                        <span className="w-28 shrink-0 font-semibold text-[#1877F2]">{key}</span>
+                        <span className="break-all text-slate-600 dark:text-slate-400">
+                          {value.length > 70 ? `${value.slice(0, 70)}…` : value}
+                        </span>
+                      </div>
+                    ))}
+                  </CardContent>
+                )}
+              </Card>
+            )}
+          </div>
+
+          <Tabs defaultValue="react" className="space-y-4">
+            <TabsList className="grid h-auto grid-cols-4 rounded-3xl bg-white p-1 shadow-sm dark:bg-[#242526] lg:grid-cols-8">
+              <TabsTrigger value="react" className="rounded-2xl text-xs">
+                <ThumbsUp className="mr-1 h-3.5 w-3.5" /> React
+              </TabsTrigger>
+              <TabsTrigger value="follow" className="rounded-2xl text-xs">
+                <UserPlus className="mr-1 h-3.5 w-3.5" /> Follow
+              </TabsTrigger>
+              <TabsTrigger value="share" className="rounded-2xl text-xs">
+                <Share2 className="mr-1 h-3.5 w-3.5" /> Share
+              </TabsTrigger>
+              <TabsTrigger value="feed" className="rounded-2xl text-xs">
+                <FileText className="mr-1 h-3.5 w-3.5" /> Posts
+              </TabsTrigger>
+              <TabsTrigger value="friends" className="rounded-2xl text-xs">
+                <Users className="mr-1 h-3.5 w-3.5" /> Friends
+              </TabsTrigger>
+              <TabsTrigger value="profile" className="rounded-2xl text-xs">
+                <Edit3 className="mr-1 h-3.5 w-3.5" /> Profile
+              </TabsTrigger>
+              <TabsTrigger value="watch" className="rounded-2xl text-xs">
+                <Video className="mr-1 h-3.5 w-3.5" /> Watch
+              </TabsTrigger>
+              <TabsTrigger value="all" className="rounded-2xl text-xs">
+                <Shield className="mr-1 h-3.5 w-3.5" /> All
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="share" className="space-y-4">
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <h3 className="mb-1 flex items-center gap-2 font-semibold">
+                    <Share2 className="h-5 w-5 text-[#1877F2]" /> Share Post
+                  </h3>
+                  <p className="mb-5 text-sm text-slate-500 dark:text-slate-400">
+                    Share any Facebook post link multiple times using your account.
+                  </p>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Post URL
+                      </label>
+                      <Input
+                        value={shareUrl}
+                        onChange={(e) => setShareUrl(e.target.value)}
+                        placeholder="https://www.facebook.com/.../posts/..."
+                        className="h-11 rounded-2xl"
+                        disabled={sharePostMutation.isPending}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Number of Shares (1–100)
+                      </label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={shareCount}
+                        onChange={(e) => setShareCount(Number(e.target.value))}
+                        className="h-11 rounded-2xl"
+                        disabled={sharePostMutation.isPending}
+                      />
+                    </div>
+
+                    <Button
+                      onClick={handleShare}
+                      disabled={sharePostMutation.isPending || !shareUrl.trim()}
+                      className="h-12 w-full rounded-2xl bg-[#1877F2] text-base font-semibold hover:bg-[#0f66d4]"
+                    >
+                      {sharePostMutation.isPending ? (
+                        <>
+                          <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                          Sharing... (this takes time, please wait)
+                        </>
+                      ) : (
+                        <>
+                          <Share2 className="mr-2 h-5 w-5" />
+                          Share {shareCount} Time{shareCount !== 1 ? "s" : ""}
+                        </>
+                      )}
+                    </Button>
+
+                    {shareResult && (
+                      <div
+                        className={`rounded-2xl border p-4 text-sm ${
+                          shareResult.failed === 0
+                            ? "border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/30 dark:text-green-300"
+                            : shareResult.success === 0
+                            ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+                            : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"
+                        }`}
+                      >
+                        <div className="font-semibold">{shareResult.message}</div>
+                        <div className="mt-1 text-xs">
+                          {shareResult.success} succeeded · {shareResult.failed} failed
+                        </div>
+                      </div>
+                    )}
+
+                    {shareLogs.length > 0 && (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-950 p-4 dark:border-slate-700">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          Share Log
+                        </p>
+                        <div className="max-h-64 space-y-1 overflow-y-auto font-mono text-xs">
+                          {shareLogs.map((log, i) => (
+                            <div
+                              key={i}
+                              className={
+                                log.includes("Success")
+                                  ? "text-green-400"
+                                  : log.includes("Failed") || log.includes("Error") || log.includes("Stopping") || log.includes("failed")
+                                  ? "text-red-400"
+                                  : log.includes("Token") || log.includes("token")
+                                  ? "text-yellow-400"
+                                  : "text-slate-300"
+                              }
+                            >
+                              {log}
+                            </div>
+                          ))}
+                          {sharePostMutation.isPending && (
+                            <div className="flex items-center gap-1 text-[#1877F2]">
+                              <Loader2 className="h-3 w-3 animate-spin" /> Processing...
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ── REACT TAB ─────────────────────────────────────────────── */}
+            <TabsContent value="react" className="space-y-4">
+              {/* Reaction Form Card */}
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <h3 className="flex items-center gap-2 font-semibold">
+                        <ThumbsUp className="h-5 w-5 text-[#1877F2]" /> React to Post
+                      </h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        {(() => {
+                          const s = sessionsQuery.data?.sessions ?? [];
+                          const active = s.filter(x => x.isActive).length;
+                          const total = s.length;
+                          return total === 0 ? "No saved accounts." : `${total} account${total !== 1 ? "s" : ""} saved — all used for reactions.${active < total ? ` (${total - active} may need fresh cookies)` : ""}`;
+                        })()}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => sessionsQuery.refetch()}
+                      className="text-slate-400 hover:text-[#1877F2]"
+                      title="Refresh accounts"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${sessionsQuery.isFetching ? "animate-spin" : ""}`} />
+                    </button>
+                  </div>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Post URL</label>
+                      <Input
+                        value={reactUrl}
+                        onChange={(e) => setReactUrl(e.target.value)}
+                        placeholder="https://www.facebook.com/.../posts/..."
+                        className="h-11 rounded-2xl"
+                        disabled={reactMutation.isPending}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Reaction Type</label>
+                      <div className="grid grid-cols-6 gap-2">
+                        {(["LIKE", "LOVE", "HAHA", "WOW", "SAD", "ANGRY"] as const).map((r) => (
+                          <button
+                            key={r}
+                            onClick={() => setReactType(r)}
+                            className={`rounded-xl border-2 py-2 text-xs font-semibold transition-all ${
+                              reactType === r
+                                ? "border-[#1877F2] bg-[#1877F2] text-white"
+                                : "border-slate-200 text-slate-500 hover:border-[#1877F2]/60 dark:border-slate-700"
+                            }`}
+                          >
+                            {r}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <Button
+                      onClick={handleReact}
+                      disabled={reactMutation.isPending || !reactUrl.trim() || !sessionsQuery.data?.total}
+                      className="h-12 w-full rounded-2xl bg-[#1877F2] text-base font-semibold hover:bg-[#0f66d4]"
+                    >
+                      {reactMutation.isPending ? (
+                        <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Reacting...</>
+                      ) : (
+                        <><Zap className="mr-2 h-5 w-5" /> React</>
+                      )}
+                    </Button>
+
+                    {reactResult && (
+                      <div className={`rounded-2xl border p-4 text-sm ${
+                        reactResult.failed === 0
+                          ? "border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/30 dark:text-green-300"
+                          : reactResult.success === 0
+                          ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+                          : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"
+                      }`}>
+                        <div className="font-semibold">{reactResult.message}</div>
+                        <div className="mt-1 text-xs">{reactResult.success} succeeded · {reactResult.failed} failed · {reactResult.total} total accounts</div>
+                      </div>
+                    )}
+
+                    {reactLogs.length > 0 && (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-950 p-4 dark:border-slate-700">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Reaction Log</p>
+                        <div className="max-h-56 space-y-1 overflow-y-auto font-mono text-xs">
+                          {reactLogs.map((log, i) => (
+                            <div key={i} className={
+                              log.includes("✓") ? "text-green-400" :
+                              log.includes("✗") || log.includes("Error") ? "text-red-400" :
+                              "text-slate-300"
+                            }>{log}</div>
+                          ))}
+                          {reactMutation.isPending && (
+                            <div className="flex items-center gap-1 text-[#1877F2]">
+                              <Loader2 className="h-3 w-3 animate-spin" /> Processing...
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+              {/* Comment Form Card */}
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <h3 className="mb-1 flex items-center gap-2 font-semibold">
+                    <MessageCircle className="h-5 w-5 text-[#1877F2]" /> Comment on Post
+                  </h3>
+                  <p className="mb-5 text-sm text-slate-500 dark:text-slate-400">
+                    All saved accounts post the same comment. 1 account = 1 comment.
+                  </p>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Post URL</label>
+                      <Input
+                        value={commentUrl}
+                        onChange={(e) => setCommentUrl(e.target.value)}
+                        placeholder="https://www.facebook.com/.../posts/..."
+                        className="h-11 rounded-2xl"
+                        disabled={commentMutation.isPending}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Comment Text</label>
+                      <textarea
+                        value={commentText}
+                        onChange={(e) => setCommentText(e.target.value)}
+                        placeholder="Type your comment here..."
+                        className="min-h-[90px] w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none focus:ring-2 focus:ring-[#1877F2] dark:border-slate-700 dark:bg-slate-900"
+                        disabled={commentMutation.isPending}
+                      />
+                    </div>
+                    <Button
+                      onClick={handleComment}
+                      disabled={commentMutation.isPending || !commentUrl.trim() || !commentText.trim() || !sessionsQuery.data?.total}
+                      className="h-12 w-full rounded-2xl bg-[#1877F2] text-base font-semibold hover:bg-[#0f66d4]"
+                    >
+                      {commentMutation.isPending ? (
+                        <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Commenting...</>
+                      ) : (
+                        <><MessageCircle className="mr-2 h-5 w-5" /> Comment</>
+                      )}
+                    </Button>
+
+                    {commentResult && (
+                      <div className={`rounded-2xl border p-4 text-sm ${
+                        commentResult.failed === 0
+                          ? "border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/30 dark:text-green-300"
+                          : commentResult.success === 0
+                          ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+                          : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"
+                      }`}>
+                        <div className="font-semibold">{commentResult.message}</div>
+                        <div className="mt-1 text-xs">{commentResult.success} succeeded · {commentResult.failed} failed · {commentResult.total} total accounts</div>
+                      </div>
+                    )}
+
+                    {commentLogs.length > 0 && (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-950 p-4 dark:border-slate-700">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Comment Log</p>
+                        <div className="max-h-56 space-y-1 overflow-y-auto font-mono text-xs">
+                          {commentLogs.map((log, i) => (
+                            <div key={i} className={
+                              log.includes("✓") ? "text-green-400" :
+                              log.includes("✗") || log.includes("Error") ? "text-red-400" :
+                              "text-slate-300"
+                            }>{log}</div>
+                          ))}
+                          {commentMutation.isPending && (
+                            <div className="flex items-center gap-1 text-[#1877F2]">
+                              <Loader2 className="h-3 w-3 animate-spin" /> Processing...
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ── FOLLOW TAB ────────────────────────────────────────────── */}
+            <TabsContent value="follow" className="space-y-4">
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <h3 className="flex items-center gap-2 font-semibold">
+                        <UserPlus className="h-5 w-5 text-[#1877F2]" /> Auto Follow / Add Friend
+                      </h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        All {sessionsQuery.data?.total ?? 0} saved accounts follow or add the target.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Target Profile URL or User ID
+                      </label>
+                      <Input
+                        value={followTarget}
+                        onChange={(e) => setFollowTarget(e.target.value)}
+                        placeholder="https://www.facebook.com/123456 or user ID"
+                        className="h-11 rounded-2xl"
+                        disabled={followMutation.isPending}
+                      />
+                    </div>
+                    <Button
+                      onClick={handleFollow}
+                      disabled={followMutation.isPending || !followTarget.trim() || !sessionsQuery.data?.total}
+                      className="h-12 w-full rounded-2xl bg-[#1877F2] text-base font-semibold hover:bg-[#0f66d4]"
+                    >
+                      {followMutation.isPending ? (
+                        <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Following...</>
+                      ) : (
+                        <><UserPlus className="mr-2 h-5 w-5" /> Follow</>
+                      )}
+                    </Button>
+
+                    {followResult && (
+                      <div className={`rounded-2xl border p-4 text-sm ${
+                        followResult.failed === 0
+                          ? "border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/30 dark:text-green-300"
+                          : followResult.success === 0
+                          ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+                          : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"
+                      }`}>
+                        <div className="font-semibold">{followResult.message}</div>
+                        <div className="mt-1 text-xs">{followResult.success} succeeded · {followResult.failed} failed · {followResult.total} total accounts</div>
+                      </div>
+                    )}
+
+                    {followLogs.length > 0 && (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-950 p-4 dark:border-slate-700">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Follow Log</p>
+                        <div className="max-h-56 space-y-1 overflow-y-auto font-mono text-xs">
+                          {followLogs.map((log, i) => (
+                            <div key={i} className={
+                              log.includes("✓") ? "text-green-400" :
+                              log.includes("✗") || log.includes("Error") ? "text-red-400" :
+                              "text-slate-300"
+                            }>{log}</div>
+                          ))}
+                          {followMutation.isPending && (
+                            <div className="flex items-center gap-1 text-[#1877F2]">
+                              <Loader2 className="h-3 w-3 animate-spin" /> Processing...
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="feed" className="space-y-4">
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <Form {...postForm}>
+                    <form onSubmit={postForm.handleSubmit(handleCreatePost)} className="space-y-3">
+                      <FormField
+                        control={postForm.control}
+                        name="message"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="flex items-center gap-2">
+                              <MessageCircle className="h-4 w-4 text-[#1877F2]" /> Create New Post
+                            </FormLabel>
+                            <FormControl>
+                              <textarea
+                                placeholder={`What's on your mind, ${auth.name}?`}
+                                className="min-h-[110px] w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:ring-2 focus:ring-[#1877F2] dark:border-slate-700 dark:bg-slate-900"
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <div className="flex flex-col gap-3 sm:flex-row">
+                        <FormField
+                          control={postForm.control}
+                          name="privacy"
+                          render={({ field }) => (
+                            <FormItem className="sm:w-40">
+                              <FormControl>
+                                <select
+                                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900"
+                                  {...field}
+                                >
+                                  <option value="SELF">Only me</option>
+                                  <option value="ALL_FRIENDS">Friends</option>
+                                  <option value="EVERYONE">Public</option>
+                                </select>
+                              </FormControl>
+                            </FormItem>
+                          )}
+                        />
+                        <Button
+                          type="submit"
+                          disabled={createPostMutation.isPending}
+                          className="h-11 flex-1 rounded-2xl bg-[#1877F2] font-semibold hover:bg-[#0f66d4]"
+                        >
+                          {createPostMutation.isPending ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Send className="mr-2 h-4 w-4" />
+                          )}
+                          Post Now
+                        </Button>
+                      </div>
+                    </form>
+                  </Form>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="flex items-center gap-2 font-semibold">
+                        <FileText className="h-5 w-5 text-[#1877F2]" /> Post Management
+                      </h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">Display, select, and delete posts.</p>
+                    </div>
+                    <Button
+                      onClick={handleLoadPosts}
+                      disabled={postsMutation.isPending}
+                      variant="outline"
+                      className="rounded-2xl border-[#1877F2] text-[#1877F2] hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                    >
+                      {postsMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                      Load Posts
+                    </Button>
+                  </div>
+
+                  {posts.length > 0 && (
+                    <div className="mb-3 flex items-center justify-between">
+                      <button
+                        onClick={handleSelectAll}
+                        className="flex items-center gap-2 text-sm font-medium text-[#1877F2] hover:underline"
+                      >
+                        {selectedPosts.size === posts.length ? (
+                          <CheckSquare className="h-4 w-4" />
+                        ) : (
+                          <Square className="h-4 w-4" />
+                        )}
+                        {selectedPosts.size === posts.length ? "Deselect All" : "Select All"}
+                      </button>
+                      {selectedPosts.size > 0 && (
+                        <Button
+                          onClick={handleDeleteSelected}
+                          disabled={deletePostsMutation.isPending}
+                          size="sm"
+                          className="h-9 rounded-2xl bg-red-500 text-xs font-semibold text-white hover:bg-red-600"
+                        >
+                          {deletePostsMutation.isPending ? (
+                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="mr-1 h-3 w-3" />
+                          )}
+                          Delete {selectedPosts.size}
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    {posts.length === 0 && !postsMutation.isPending ? (
+                      <EmptyState text="Load posts to display your Facebook timeline posts here." />
+                    ) : (
+                      posts.map((post) => (
+                        <div
+                          key={post.id}
+                          className={`rounded-2xl border p-4 transition-colors ${selectedPosts.has(post.id) ? "border-[#1877F2] bg-blue-50 dark:bg-blue-950/30" : "border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/60"}`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <button onClick={() => handleTogglePost(post.id)} className="mt-1 shrink-0">
+                              {selectedPosts.has(post.id) ? (
+                                <CheckSquare className="h-5 w-5 text-[#1877F2]" />
+                              ) : (
+                                <Square className="h-5 w-5 text-slate-400" />
+                              )}
+                            </button>
+                            <div className="min-w-0 flex-1">
+                              <p className="whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-100">
+                                {post.message}
+                              </p>
+                              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                                <span>{new Date(post.createdTime).toLocaleString()}</span>
+                                <span>ID: {post.id.slice(0, 18)}</span>
+                                {post.permalink && (
+                                  <a
+                                    className="inline-flex items-center gap-1 text-[#1877F2] hover:underline"
+                                    href={post.permalink}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    Open <ExternalLink className="h-3 w-3" />
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="friends" className="space-y-4">
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="flex items-center gap-2 font-semibold">
+                        <Users className="h-5 w-5 text-[#1877F2]" /> Friends
+                        {friends.length > 0 && (
+                          <span className="rounded-full bg-[#1877F2]/10 px-2 py-0.5 text-xs font-bold text-[#1877F2]">
+                            {friends.length}
+                          </span>
+                        )}
+                      </h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        Your real Facebook friends with profile pictures.
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={handleLoadFriends}
+                        disabled={friendsMutation.isPending || unfriendAllInProgress}
+                        className="rounded-2xl bg-[#1877F2] hover:bg-[#0f66d4]"
+                      >
+                        {friendsMutation.isPending ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                        )}
+                        {friends.length > 0 ? "Refresh Friends" : "Load Friends"}
+                      </Button>
+                      {friends.length > 0 && (
+                        <Button
+                          onClick={handleUnfriendAll}
+                          disabled={unfriendAllInProgress || friendsMutation.isPending}
+                          variant="destructive"
+                          className="rounded-2xl"
+                        >
+                          {unfriendAllInProgress ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <UserMinus className="mr-2 h-4 w-4" />
+                          )}
+                          {unfriendAllInProgress ? "Unfriending All..." : "Unfriend All"}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {friends.length === 0 && !friendsMutation.isPending ? (
+                    <EmptyState text="Click 'Load Friends' to fetch your Facebook friends." />
+                  ) : (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {friends.map((friend) => (
+                        <div
+                          key={friend.id}
+                          className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/60"
+                        >
+                          <a
+                            href={friend.profileUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="shrink-0"
+                          >
+                            <img
+                              src={friend.pictureUrl}
+                              alt={friend.name}
+                              className="h-12 w-12 rounded-full object-cover ring-2 ring-slate-200 dark:ring-slate-700"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = `https://graph.facebook.com/${friend.id}/picture?type=large`;
+                              }}
+                            />
+                          </a>
+                          <div className="min-w-0 flex-1">
+                            <a
+                              href={friend.profileUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block truncate text-sm font-semibold hover:text-[#1877F2]"
+                            >
+                              {friend.name}
+                            </a>
+                            <p className="truncate text-xs text-slate-500">{friend.id}</p>
+                          </div>
+                          <button
+                            onClick={() => handleUnfriend(friend)}
+                            disabled={unfriendingIds.has(friend.id)}
+                            className="shrink-0 rounded-xl border border-red-200 bg-red-50 p-1.5 text-red-500 transition-colors hover:bg-red-100 disabled:opacity-50 dark:border-red-900 dark:bg-red-950/30 dark:hover:bg-red-900/40"
+                            title="Unfriend"
+                          >
+                            {unfriendingIds.has(friend.id) ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <UserMinus className="h-4 w-4" />
+                            )}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="profile" className="space-y-4">
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <h3 className="mb-1 flex items-center gap-2 font-semibold">
+                    <Image className="h-5 w-5 text-[#1877F2]" /> Change Profile Picture
+                  </h3>
+                  <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">
+                    Upload a file or paste an image URL.
+                  </p>
+
+                  <div className="mb-4 flex gap-2">
+                    <button
+                      onClick={() => setPfpMode("file")}
+                      className={`flex-1 rounded-xl border py-2 text-sm font-medium transition-colors ${pfpMode === "file" ? "border-[#1877F2] bg-blue-50 text-[#1877F2] dark:bg-blue-950/30" : "border-slate-200 dark:border-slate-700"}`}
+                    >
+                      Upload File
+                    </button>
+                    <button
+                      onClick={() => setPfpMode("url")}
+                      className={`flex-1 rounded-xl border py-2 text-sm font-medium transition-colors ${pfpMode === "url" ? "border-[#1877F2] bg-blue-50 text-[#1877F2] dark:bg-blue-950/30" : "border-slate-200 dark:border-slate-700"}`}
+                    >
+                      From URL
+                    </button>
+                  </div>
+
+                  {pfpMode === "file" ? (
+                    <div>
+                      <label className="flex cursor-pointer flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 p-6 transition-colors hover:border-[#1877F2] hover:bg-blue-50 dark:border-slate-700 dark:hover:bg-blue-950/20">
+                        {updateProfilePictureMutation.isPending ? (
+                          <Loader2 className="h-8 w-8 animate-spin text-[#1877F2]" />
+                        ) : (
+                          <Image className="h-8 w-8 text-slate-400" />
+                        )}
+                        <span className="text-sm font-medium text-slate-600 dark:text-slate-400">
+                          {updateProfilePictureMutation.isPending ? "Uploading..." : "Click to choose an image"}
+                        </span>
+                        <span className="text-xs text-slate-400">JPG, PNG, GIF up to 10MB</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleProfilePictureChangeFile}
+                          disabled={updateProfilePictureMutation.isPending}
+                        />
+                      </label>
+                    </div>
+                  ) : (
+                    <Form {...pfpUrlForm}>
+                      <form onSubmit={pfpUrlForm.handleSubmit(handleProfilePictureChangeUrl)} className="space-y-3">
+                        <FormField
+                          control={pfpUrlForm.control}
+                          name="imageUrl"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Image URL</FormLabel>
+                              <FormControl>
+                                <Input
+                                  placeholder="https://example.com/image.jpg"
+                                  className="h-11 rounded-2xl"
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <Button
+                          type="submit"
+                          disabled={updateProfilePictureMutation.isPending}
+                          className="h-11 w-full rounded-2xl bg-[#1877F2] font-semibold hover:bg-[#0f66d4]"
+                        >
+                          {updateProfilePictureMutation.isPending ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Image className="mr-2 h-4 w-4" />
+                          )}
+                          {updateProfilePictureMutation.isPending ? "Uploading..." : "Set Profile Picture from URL"}
+                        </Button>
+                      </form>
+                    </Form>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <h3 className="mb-1 flex items-center gap-2 font-semibold">
+                    <Edit3 className="h-5 w-5 text-[#1877F2]" /> Update Profile Info
+                  </h3>
+                  <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">
+                    Submit profile changes. Bio update is fully supported.
+                  </p>
+                  <Form {...profileForm}>
+                    <form onSubmit={profileForm.handleSubmit(handleUpdateProfile)} className="grid gap-3 sm:grid-cols-2">
+                      <FormField
+                        control={profileForm.control}
+                        name="name"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="flex items-center gap-1">
+                              <User className="h-3 w-3" /> Name
+                            </FormLabel>
+                            <FormControl>
+                              <Input className="rounded-2xl" placeholder={auth.name} {...field} />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={profileForm.control}
+                        name="city"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="flex items-center gap-1">
+                              <MapPin className="h-3 w-3" /> City
+                            </FormLabel>
+                            <FormControl>
+                              <Input className="rounded-2xl" placeholder="Current city" {...field} />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={profileForm.control}
+                        name="work"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="flex items-center gap-1">
+                              <Briefcase className="h-3 w-3" /> Work
+                            </FormLabel>
+                            <FormControl>
+                              <Input className="rounded-2xl" placeholder="Workplace" {...field} />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={profileForm.control}
+                        name="education"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="flex items-center gap-1">
+                              <GraduationCap className="h-3 w-3" /> Education
+                            </FormLabel>
+                            <FormControl>
+                              <Input className="rounded-2xl" placeholder="School" {...field} />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={profileForm.control}
+                        name="relationship"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="flex items-center gap-1">
+                              <Heart className="h-3 w-3" /> Relationship
+                            </FormLabel>
+                            <FormControl>
+                              <Input className="rounded-2xl" placeholder="Relationship status" {...field} />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={profileForm.control}
+                        name="website"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="flex items-center gap-1">
+                              <Link2 className="h-3 w-3" /> Website
+                            </FormLabel>
+                            <FormControl>
+                              <Input className="rounded-2xl" placeholder="https://..." {...field} />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={profileForm.control}
+                        name="bio"
+                        render={({ field }) => (
+                          <FormItem className="sm:col-span-2">
+                            <FormLabel>Bio</FormLabel>
+                            <FormControl>
+                              <textarea
+                                className="min-h-[90px] w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none focus:ring-2 focus:ring-[#1877F2] dark:border-slate-700 dark:bg-slate-900"
+                                placeholder="Write your bio"
+                                {...field}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <Button
+                        type="submit"
+                        disabled={updateProfileMutation.isPending}
+                        className="h-11 rounded-2xl bg-[#1877F2] hover:bg-[#0f66d4] sm:col-span-2"
+                      >
+                        {updateProfileMutation.isPending ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Edit3 className="mr-2 h-4 w-4" />
+                        )}
+                        Update Profile
+                      </Button>
+                    </form>
+                  </Form>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="watch" className="space-y-4">
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="flex items-center gap-2 font-semibold">
+                        <Video className="h-5 w-5 text-[#1877F2]" /> Watch Videos
+                      </h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        Load videos and play them inside the app.
+                      </p>
+                    </div>
+                    <Button
+                      onClick={handleLoadVideos}
+                      disabled={videosMutation.isPending}
+                      className="rounded-2xl bg-[#1877F2] hover:bg-[#0f66d4]"
+                    >
+                      {videosMutation.isPending ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Play className="mr-2 h-4 w-4" />
+                      )}
+                      Load Videos
+                    </Button>
+                  </div>
+                  {selectedVideo ? (
+                    <div className="space-y-4">
+                      <div className="overflow-hidden rounded-3xl bg-black">
+                        {selectedVideo.videoUrl ? (
+                          <video
+                            src={selectedVideo.videoUrl}
+                            poster={selectedVideo.thumbnailUrl || undefined}
+                            controls
+                            className="aspect-video w-full"
+                          />
+                        ) : (
+                          <div className="flex aspect-video items-center justify-center text-white">
+                            Video URL unavailable
+                          </div>
+                        )}
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {videos.map((video) => (
+                          <button
+                            key={video.id}
+                            onClick={() => setActiveVideoId(video.id)}
+                            className={`flex gap-3 rounded-2xl border p-3 text-left ${selectedVideo.id === video.id ? "border-[#1877F2] bg-blue-50 dark:bg-blue-950/30" : "border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/60"}`}
+                          >
+                            <div className="flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-black">
+                              {video.thumbnailUrl ? (
+                                <img src={video.thumbnailUrl} alt={video.title} className="h-full w-full object-cover" />
+                              ) : (
+                                <Play className="h-6 w-6 text-white" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="line-clamp-2 text-sm font-semibold">{video.title}</p>
+                              <p className="mt-1 text-xs text-slate-500">{new Date(video.createdTime).toLocaleDateString()}</p>
+                              <a
+                                href={video.permalink}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(event) => event.stopPropagation()}
+                                className="mt-1 inline-flex items-center gap-1 text-xs text-[#1877F2] hover:underline"
+                              >
+                                Open on Facebook <ExternalLink className="h-3 w-3" />
+                              </a>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <EmptyState text="Load videos to start watching." />
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="all" className="space-y-4">
+              <Card className="rounded-3xl border-0 shadow-sm dark:bg-[#242526]">
+                <CardContent className="p-6">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <Button
+                      onClick={handleLoadFriends}
+                      className="h-12 rounded-2xl bg-[#1877F2] hover:bg-[#0f66d4]"
+                    >
+                      <Users className="mr-2 h-4 w-4" /> Fetch Friends
+                    </Button>
+                    <Button
+                      onClick={handleLoadPosts}
+                      className="h-12 rounded-2xl bg-[#1877F2] hover:bg-[#0f66d4]"
+                    >
+                      <FileText className="mr-2 h-4 w-4" /> Display Posts
+                    </Button>
+                    <Button
+                      onClick={handleLoadVideos}
+                      className="h-12 rounded-2xl bg-[#1877F2] hover:bg-[#0f66d4]"
+                    >
+                      <Video className="mr-2 h-4 w-4" /> Watch Videos
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </div>
+
+        <p className="pb-4 text-center text-xs text-slate-400">Facebook Guard — v4.0</p>
+      </div>
+
+      {/* ── Admin Panel Overlay ─────────────────────────────────────────────── */}
+      {adminOpen && (
+        <div className="fixed inset-0 z-50 flex">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setAdminOpen(false)}
+          />
+          {/* Panel */}
+          <div className="relative ml-auto flex h-full w-full max-w-md flex-col overflow-y-auto bg-white shadow-2xl dark:bg-[#18191A]">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+              <div className="flex items-center gap-2">
+                <Settings className="h-5 w-5 text-[#1877F2]" />
+                <span className="text-lg font-bold">Admin Panel</span>
+              </div>
+              <button
+                onClick={() => setAdminOpen(false)}
+                className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {!adminLoggedIn ? (
+              /* Login Form */
+              <div className="flex flex-1 flex-col items-center justify-center p-8">
+                <div className="w-full max-w-sm space-y-4">
+                  <div className="text-center">
+                    <Lock className="mx-auto mb-3 h-12 w-12 text-[#1877F2]" />
+                    <h2 className="text-xl font-bold">Admin Access</h2>
+                    <p className="mt-1 text-sm text-slate-500">Enter admin credentials to continue</p>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
+                    <Input
+                      value={adminLoginUser}
+                      onChange={(e) => setAdminLoginUser(e.target.value)}
+                      placeholder="Username"
+                      className="h-11 rounded-2xl"
+                      onKeyDown={(e) => e.key === "Enter" && adminLoginHandler()}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
+                    <Input
+                      type="password"
+                      value={adminLoginPass}
+                      onChange={(e) => setAdminLoginPass(e.target.value)}
+                      placeholder="Password"
+                      className="h-11 rounded-2xl"
+                      onKeyDown={(e) => e.key === "Enter" && adminLoginHandler()}
+                    />
+                  </div>
+                  {adminLoginError && (
+                    <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+                      {adminLoginError}
+                    </div>
+                  )}
+                  <Button
+                    onClick={adminLoginHandler}
+                    disabled={adminLoginPending || !adminLoginUser.trim() || !adminLoginPass.trim()}
+                    className="h-12 w-full rounded-2xl bg-[#1877F2] text-base font-semibold hover:bg-[#0f66d4]"
+                  >
+                    {adminLoginPending ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Lock className="mr-2 h-5 w-5" />}
+                    {adminLoginPending ? "Verifying..." : "Login"}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              /* Admin Content */
+              <div className="flex-1 space-y-6 p-6">
+                {/* Info bar */}
+                <div className="flex items-center justify-between rounded-2xl bg-[#1877F2]/10 px-4 py-3">
+                  <span className="text-sm font-semibold text-[#1877F2]">Logged in as admin</span>
+                  <button
+                    onClick={() => { setAdminLoggedIn(false); setAdminFullSessions([]); setAdminLoginUser(""); setAdminLoginPass(""); }}
+                    className="text-xs text-slate-500 hover:text-red-500"
+                  >
+                    Logout
+                  </button>
+                </div>
+
+                {/* Dark mode */}
+                <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                  <span className="flex items-center gap-2 text-sm font-semibold">
+                    {darkMode ? <Moon className="h-4 w-4 text-[#1877F2]" /> : <Sun className="h-4 w-4 text-[#1877F2]" />}
+                    Dark Mode
+                  </span>
+                  <ThemeToggle darkMode={darkMode} onToggle={() => setDarkMode(v => !v)} />
+                </div>
+
+                {/* Change credentials */}
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                  <h3 className="mb-3 flex items-center gap-2 text-sm font-bold">
+                    <KeyRound className="h-4 w-4 text-[#1877F2]" /> Change Admin Credentials
+                  </h3>
+                  <div className="space-y-3">
+                    <Input
+                      value={adminNewUser}
+                      onChange={(e) => setAdminNewUser(e.target.value)}
+                      placeholder="New username"
+                      className="h-10 rounded-xl text-sm"
+                    />
+                    <Input
+                      type="password"
+                      value={adminNewPass}
+                      onChange={(e) => setAdminNewPass(e.target.value)}
+                      placeholder="New password"
+                      className="h-10 rounded-xl text-sm"
+                    />
+                    <Button
+                      onClick={updateAdminCreds}
+                      disabled={!adminNewUser.trim() || !adminNewPass.trim()}
+                      className="h-10 w-full rounded-xl bg-[#1877F2] text-sm font-semibold hover:bg-[#0f66d4]"
+                    >
+                      Save Credentials
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Saved accounts */}
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="flex items-center gap-2 text-sm font-bold">
+                      <Database className="h-4 w-4 text-[#1877F2]" /> Saved Accounts
+                      <span className="rounded-full bg-[#1877F2]/10 px-2 py-0.5 text-xs font-semibold text-[#1877F2]">
+                        {adminFullSessions.length}
+                      </span>
+                    </h3>
+                    <button
+                      onClick={() => loadAdminSessions(adminCredsBase64)}
+                      className="text-slate-400 hover:text-[#1877F2]"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${adminSessionsLoading ? "animate-spin" : ""}`} />
+                    </button>
+                  </div>
+
+                  {adminSessionsLoading ? (
+                    <div className="flex items-center justify-center py-8 text-slate-400">
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading sessions...
+                    </div>
+                  ) : adminFullSessions.length === 0 ? (
+                    <p className="rounded-2xl bg-amber-50 p-3 text-sm text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
+                      No saved accounts.
+                    </p>
+                  ) : (
+                    <div className="space-y-4">
+                      {adminFullSessions.map((s) => (
+                        <div key={s.userId} className={`rounded-2xl border p-4 ${s.isActive ? "border-slate-200 bg-white dark:border-slate-700 dark:bg-[#242526]" : "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20"}`}>
+                          <div className="mb-3 flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <p className="font-semibold">{s.name}</p>
+                                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${s.isActive ? "bg-green-100 text-green-700 dark:bg-green-950/30 dark:text-green-400" : "bg-red-100 text-red-700 dark:bg-red-950/30 dark:text-red-400"}`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${s.isActive ? "bg-green-500" : "bg-red-500"}`} />
+                                  {s.isActive ? "Active" : "Logged Out"}
+                                </span>
+                              </div>
+                              <p className="font-mono text-xs text-slate-500">UID: {s.userId}</p>
+                              <p className="text-xs text-slate-400">{s.createdAt ? new Date(s.createdAt).toLocaleString() : ""}</p>
+                              {s.lastPinged && <p className="text-xs text-slate-400">Last checked: {new Date(s.lastPinged).toLocaleString()}</p>}
+                              {!s.isActive && <p className="mt-1 text-xs font-medium text-orange-600 dark:text-orange-400">Still attempted in reactions. Re-import fresh cookies if it keeps failing.</p>}
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1">
+                              {!s.isActive && (
+                                <button
+                                  onClick={() => reactivateSession(s.userId)}
+                                  disabled={reactivatingId === s.userId}
+                                  title="Check if session is still alive"
+                                  className="flex h-8 items-center gap-1 rounded-xl border border-blue-200 px-2 text-xs font-semibold text-blue-500 hover:bg-blue-50 disabled:opacity-50 dark:border-blue-800 dark:hover:bg-blue-950/30"
+                                >
+                                  {reactivatingId === s.userId ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                                  {reactivatingId === s.userId ? "Checking..." : "Try Reactivate"}
+                                </button>
+                              )}
+                            <button
+                              onClick={() => {
+                                deleteSessionMutation.mutate(s.userId, {
+                                  onSuccess: () => {
+                                    setAdminFullSessions(prev => prev.filter(x => x.userId !== s.userId));
+                                  }
+                                });
+                              }}
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-red-200 text-red-400 hover:bg-red-50 dark:border-red-900 dark:hover:bg-red-950/30"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                            </div>
+                          </div>
+
+                          {/* EAAG Token */}
+                          <div className="mb-2">
+                            <div className="mb-1 flex items-center justify-between">
+                              <span className="text-xs font-semibold text-[#1877F2]">EAAG Token</span>
+                              <div className="flex gap-1">
+                                {s.eaagToken && (
+                                  <button
+                                    onClick={() => copyToClipboard(s.eaagToken, "EAAG token")}
+                                    className="text-slate-400 hover:text-[#1877F2]"
+                                  >
+                                    <Copy className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => setRevealEaag(p => ({ ...p, [s.userId]: !p[s.userId] }))}
+                                  className="text-slate-400 hover:text-[#1877F2]"
+                                >
+                                  {revealEaag[s.userId] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                                </button>
+                              </div>
+                            </div>
+                            <div className="rounded-xl bg-slate-100 p-2 font-mono text-xs break-all dark:bg-slate-800">
+                              {s.eaagToken
+                                ? (revealEaag[s.userId] ? s.eaagToken : `${s.eaagToken.substring(0, 12)}${"•".repeat(20)}`)
+                                : <span className="text-slate-400 italic">Not available</span>}
+                            </div>
+                          </div>
+
+                          {/* Cookie */}
+                          <div className="mb-2">
+                            <div className="mb-1 flex items-center justify-between">
+                              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">Cookie</span>
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={() => copyToClipboard(s.cookie, "Cookie")}
+                                  className="text-slate-400 hover:text-[#1877F2]"
+                                >
+                                  <Copy className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => setRevealCookie(p => ({ ...p, [s.userId]: !p[s.userId] }))}
+                                  className="text-slate-400 hover:text-[#1877F2]"
+                                >
+                                  {revealCookie[s.userId] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                                </button>
+                              </div>
+                            </div>
+                            <div className="max-h-24 overflow-y-auto rounded-xl bg-slate-100 p-2 font-mono text-xs break-all dark:bg-slate-800">
+                              {revealCookie[s.userId]
+                                ? s.cookie
+                                : `${s.cookie.substring(0, 20)}${"•".repeat(30)}`}
+                            </div>
+                          </div>
+
+                          {/* DTSG Token */}
+                          <div>
+                            <div className="mb-1 flex items-center justify-between">
+                              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">fb_dtsg</span>
+                              <button
+                                onClick={() => setRevealDtsg(p => ({ ...p, [s.userId]: !p[s.userId] }))}
+                                className="text-slate-400 hover:text-[#1877F2]"
+                              >
+                                {revealDtsg[s.userId] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                              </button>
+                            </div>
+                            <div className="rounded-xl bg-slate-100 p-2 font-mono text-xs break-all dark:bg-slate-800">
+                              {s.dtsg
+                                ? (revealDtsg[s.userId] ? s.dtsg : `${s.dtsg.substring(0, 10)}${"•".repeat(20)}`)
+                                : <span className="text-slate-400 italic">Not available</span>}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
